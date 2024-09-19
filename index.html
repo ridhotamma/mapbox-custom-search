@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapbox 3D Dark Theme with Two Locations and Curved Connection</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.9.1/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.9.1/mapbox-gl.css' rel='stylesheet' />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        .autocomplete-items {
+            position: absolute;
+            border: 1px solid #4B5563;
+            border-top: none;
+            z-index: 99;
+            top: 100%;
+            left: 0;
+            right: 0;
+        }
+
+        .autocomplete-items div {
+            padding: 10px;
+            cursor: pointer;
+            background-color: #1F2937;
+            border-bottom: 1px solid #4B5563;
+        }
+
+        .autocomplete-items div:hover {
+            background-color: #374151;
+        }
+
+        .autocomplete-active {
+            background-color: #374151 !important;
+            color: #ffffff;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-900">
+    <div id="map"></div>
+    <div class="absolute top-4 left-4 z-10">
+        <form id="search-form" class="flex flex-col space-y-2">
+            <div class="relative w-64">
+                <input type="text" id="search-input-1" placeholder="Search location 1"
+                    class="w-full px-4 py-2 rounded-lg focus:outline-none bg-gray-800 text-white" />
+                <div id="autocomplete-list-1" class="autocomplete-items text-white"></div>
+            </div>
+            <div class="relative w-64">
+                <input type="text" id="search-input-2" placeholder="Search location 2"
+                    class="w-full px-4 py-2 rounded-lg focus:outline-none bg-gray-800 text-white" />
+                <div id="autocomplete-list-2" class="autocomplete-items text-white"></div>
+            </div>
+            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Search</button>
+        </form>
+    </div>
+    <script>
+        mapboxgl.accessToken = 'your_api_key';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/dark-v10',
+            zoom: 1,
+            center: [0, 0],
+            projection: 'globe'
+        });
+
+        map.on('style.load', () => {
+            map.setFog({
+                color: 'rgb(186, 210, 235)',
+                'high-color': 'rgb(36, 92, 223)',
+                'horizon-blend': 0.02,
+                'space-color': 'rgb(11, 11, 25)',
+                'star-intensity': 0.6
+            });
+        });
+
+        map.on('load', () => {
+            // Add 3D building layer
+            map.addLayer({
+                'id': '3d-buildings',
+                'source': 'composite',
+                'source-layer': 'building',
+                'filter': ['==', 'extrude', 'true'],
+                'type': 'fill-extrusion',
+                'minzoom': 15,
+                'paint': {
+                    'fill-extrusion-color': '#4B6587',
+                    'fill-extrusion-height': [
+                        'interpolate',
+                        ['linear'],
+                        ['zoom'],
+                        15,
+                        0,
+                        15.05,
+                        ['get', 'height']
+                    ],
+                    'fill-extrusion-base': [
+                        'interpolate',
+                        ['linear'],
+                        ['zoom'],
+                        15,
+                        0,
+                        15.05,
+                        ['get', 'min_height']
+                    ],
+                    'fill-extrusion-opacity': 0.6
+                }
+            });
+
+            // Customize map colors for blue Darcula theme
+            map.setPaintProperty('water', 'fill-color', '#1E3A5F');
+            map.setPaintProperty('landcover', 'fill-color', '#2B2B2B');
+            map.setPaintProperty('land', 'background-color', '#2B2B2B');
+            map.setPaintProperty('road-primary', 'line-color', '#3C3F41');
+            map.setPaintProperty('road-secondary-tertiary', 'line-color', '#323232');
+            map.setPaintProperty('road-street', 'line-color', '#2A2A2A');
+
+            // Add a source and layer for the curved line
+            map.addSource('route', {
+                'type': 'geojson',
+                'data': {
+                    'type': 'Feature',
+                    'properties': {},
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': []
+                    }
+                }
+            });
+
+            map.addLayer({
+                'id': 'route',
+                'type': 'line',
+                'source': 'route',
+                'layout': {
+                    'line-join': 'round',
+                    'line-cap': 'round'
+                },
+                'paint': {
+                    'line-color': '#007cbf',
+                    'line-width': 3,
+                    'line-opacity': 0.8
+                }
+            });
+        });
+
+        // Add navigation controls
+        map.addControl(new mapboxgl.NavigationControl());
+
+        // Add fullscreen control
+        map.addControl(new mapboxgl.FullscreenControl());
+
+        // Function to toggle between globe and mercator projection
+        function updateProjection(zoom) {
+            if (zoom <= 5) {
+                map.setProjection('globe');
+            } else {
+                map.setProjection('mercator');
+            }
+        }
+
+        // Listen for zoom events
+        map.on('zoom', () => {
+            updateProjection(map.getZoom());
+        });
+
+        // Initial projection update
+        updateProjection(map.getZoom());
+
+        // Search functionality with autocomplete
+        const searchForm = document.getElementById('search-form');
+        const searchInput1 = document.getElementById('search-input-1');
+        const searchInput2 = document.getElementById('search-input-2');
+        const autocompleteList1 = document.getElementById('autocomplete-list-1');
+        const autocompleteList2 = document.getElementById('autocomplete-list-2');
+
+        let currentFocus1 = -1;
+        let currentFocus2 = -1;
+        let debounceTimer1;
+        let debounceTimer2;
+
+        function setupAutocomplete(input, autocompleteList, currentFocus, debounceTimer) {
+            input.addEventListener('input', function (e) {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    const query = this.value;
+                    if (!query) {
+                        autocompleteList.innerHTML = '';
+                        return false;
+                    }
+
+                    fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}&autocomplete=true`)
+                        .then(response => response.json())
+                        .then(data => {
+                            autocompleteList.innerHTML = '';
+                            if (data.features && data.features.length > 0) {
+                                data.features.forEach((feature, index) => {
+                                    const div = document.createElement('div');
+                                    div.innerHTML = feature.place_name;
+                                    div.addEventListener('click', function () {
+                                        input.value = feature.place_name;
+                                        autocompleteList.innerHTML = '';
+                                    });
+                                    autocompleteList.appendChild(div);
+                                });
+                            }
+                        });
+                }, 300);
+            });
+
+            input.addEventListener('keydown', function (e) {
+                const x = autocompleteList.getElementsByTagName('div');
+                if (e.keyCode === 40) { // Down arrow
+                    currentFocus++;
+                    addActive(x, currentFocus);
+                } else if (e.keyCode === 38) { // Up arrow
+                    currentFocus--;
+                    addActive(x, currentFocus);
+                } else if (e.keyCode === 13) { // Enter
+                    e.preventDefault();
+                    if (currentFocus > -1) {
+                        if (x[currentFocus]) {
+                            x[currentFocus].click();
+                        }
+                    }
+                }
+            });
+        }
+
+        setupAutocomplete(searchInput1, autocompleteList1, currentFocus1, debounceTimer1);
+        setupAutocomplete(searchInput2, autocompleteList2, currentFocus2, debounceTimer2);
+
+        function addActive(x, currentFocus) {
+            if (!x) return false;
+            removeActive(x);
+            if (currentFocus >= x.length) currentFocus = 0;
+            if (currentFocus < 0) currentFocus = (x.length - 1);
+            x[currentFocus].classList.add('autocomplete-active');
+        }
+
+        function removeActive(x) {
+            for (let i = 0; i < x.length; i++) {
+                x[i].classList.remove('autocomplete-active');
+            }
+        }
+
+        let markers = [];
+
+        function addMarker(center) {
+            const marker = new mapboxgl.Marker()
+                .setLngLat(center)
+                .addTo(map);
+            markers.push(marker);
+        }
+
+        function clearMarkers() {
+            markers.forEach(marker => marker.remove());
+            markers = [];
+        }
+
+        function flyToBounds(coords) {
+            const bounds = new mapboxgl.LngLatBounds();
+            coords.forEach(coord => bounds.extend(coord));
+            map.fitBounds(bounds, {
+                padding: 100,
+                duration: 2000
+            });
+        }
+
+        function drawCurvedLine(start, end) {
+            const lineDistance = turf.distance(turf.point(start), turf.point(end));
+            const midPoint = turf.midpoint(turf.point(start), turf.point(end));
+            const bearing = turf.bearing(turf.point(start), turf.point(end));
+            const perpendicularBearing = bearing - 90;
+
+            // Calculate the height of the parabola
+            const curveHeight = lineDistance / 4;
+
+            const controlPoint = turf.destination(
+                midPoint,
+                curveHeight,
+                perpendicularBearing,
+                { units: 'kilometers' }
+            );
+
+            // Generate points along the parabola
+            const numPoints = 100;
+            const curvePoints = [];
+
+            for (let i = 0; i <= numPoints; i++) {
+                const t = i / numPoints;
+                const x = start[0] * (1 - t) * (1 - t) + controlPoint.geometry.coordinates[0] * 2 * (1 - t) * t + end[0] * t * t;
+                const y = start[1] * (1 - t) * (1 - t) + controlPoint.geometry.coordinates[1] * 2 * (1 - t) * t + end[1] * t * t;
+                curvePoints.push([x, y]);
+            }
+
+            const curvedLine = {
+                'type': 'Feature',
+                'properties': {},
+                'geometry': {
+                    'type': 'LineString',
+                    'coordinates': curvePoints
+                }
+            };
+
+            map.getSource('route').setData(curvedLine);
+        }
+
+        searchForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const query1 = searchInput1.value;
+            const query2 = searchInput2.value;
+
+            clearMarkers();
+
+            Promise.all([
+                fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query1)}.json?access_token=${mapboxgl.accessToken}`).then(response => response.json()),
+                fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query2)}.json?access_token=${mapboxgl.accessToken}`).then(response => response.json())
+            ])
+                .then(([data1, data2]) => {
+                    const coords = [];
+                    if (data1.features && data1.features.length > 0) {
+                        addMarker(data1.features[0].center);
+                        coords.push(data1.features[0].center);
+                    }
+                    if (data2.features && data2.features.length > 0) {
+                        addMarker(data2.features[0].center);
+                        coords.push(data2.features[0].center);
+                    }
+                    if (coords.length === 2) {
+                        flyToBounds(coords);
+                        drawCurvedLine(coords[0], coords[1]);
+                    } else {
+                        alert('Please enter two valid locations.');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while searching. Please try again.');
+                });
+        });
+
+        // Close the autocomplete lists when clicking outside of them
+        document.addEventListener('click', function (e) {
+            if (e.target !== searchInput1 && e.target !== autocompleteList1) {
+                autocompleteList1.innerHTML = '';
+            }
+            if (e.target !== searchInput2 && e.target !== autocompleteList2) {
+                autocompleteList2.innerHTML = '';
+            }
+        });
+    </script>
+</body>
+
+</html>
